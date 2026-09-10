@@ -31,6 +31,7 @@ def get_mean_width(y_true, y_pred, return_scaled=False, empty_set=None):
         return scaled_mean_width
     return mean_width
 
+
 def get_median_width(y_true, y_pred, return_scaled=False, empty_set=None):
     if len(y_true) == 0:
         return np.nan
@@ -69,6 +70,8 @@ def get_class_median_width(y_true, y_pred, return_scaled=False, empty_set=None):
         return scaled_class_median_widths
     return class_median_widths
 
+
+
 def get_all_metrics(y_true, y_pred, empty_set='to_full'):
     return {
         'coverage': get_coverage(y_true, y_pred, empty_set=empty_set),
@@ -102,6 +105,17 @@ def process_empty_set(y_true, y_pred, empty_set):
     else:
         raise ValueError(f"empty_set must be either 'remove' or 'to_full', got {empty_set}")
     return y_true, y_pred
+
+
+def get_uncertainties(ensemble):
+
+    ensemble_mean = np.nanmean(ensemble, axis=2)
+    Utotal = -np.sum(ensemble_mean * np.log(np.clip(ensemble_mean, 1e-12, 1.0)), axis=1)
+    Ualeatoric = np.nanmean(-np.sum(ensemble*np.log(np.clip(ensemble, 1e-12, 1.0)), axis=1), axis=1)
+    Uepistemic = Utotal-Ualeatoric
+
+    return Uepistemic, Ualeatoric
+
 
 if __name__ == "__main__":
     # TODO: Add tests

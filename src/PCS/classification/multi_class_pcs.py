@@ -28,6 +28,7 @@ class MultiClassPCS:
     def __init__(
         self,
         models,
+        n_classes,
         num_bootstraps=100,
         alpha=0.1,
         seed=42,
@@ -65,7 +66,7 @@ class MultiClassPCS:
         self.top_k_models = None
         self.bootstrap_models = None
         self.calibration_method = calibration_method
-        self.n_classes = None
+        self.n_classes = n_classes
 
     def fit(self, X, y, alpha=None):
         """
@@ -81,7 +82,6 @@ class MultiClassPCS:
         4. Get the top k models
         5. Calibrate the top-k models
         """
-        self.n_classes = len(np.unique(y))
         if alpha is None:
             alpha = self.alpha
         self.alpha = alpha
@@ -137,7 +137,7 @@ class MultiClassPCS:
         """
         for model in self.models:
             y_pred = self.models[model].predict_proba(X)
-            self.pred_scores[model] = self.metric(y, y_pred)
+            self.pred_scores[model] = self.metric(y, y_pred, labels=range(self.n_classes))
 
     def _get_top_k(self):
         """

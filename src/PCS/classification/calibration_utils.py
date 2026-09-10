@@ -2,6 +2,8 @@ import numpy as np
 from tqdm import tqdm
 
 
+
+
 def softmax(logits):
     """
     Apply softmax function to convert logits to probabilities.
@@ -199,3 +201,93 @@ def predict_APS_calibration(
             # if count >= top_k:
             #     break
     return prediction_sets
+
+
+def JUCAL_calibration(X, y, bootstrap_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K):
+    """ 
+    Args:
+        X: features of the calibration set
+        y: labels of the calibration set
+        bootstrap_indices: indices of the bootstrap samples
+        bootstrap_models: dictionary of bootstrap models
+        C1: grid of coarse c1 values
+        C2: grid of coarse c2 values
+        K: number of values in refined grid
+    """
+
+
+    all_predictions = []
+    labels_ = range(0, n_classes)
+    print("number of classes", n_classes)
+
+    for i, model in tqdm(enumerate(bootstrap_models)):
+        predictions = np.full((len(X), n_classes), np.nan)
+        bootstrap_preds = model.predict_proba(X[bootstrap_indices[i]])
+        for j, idx in enumerate(bootstrap_indices[i]):
+            predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+        # predictions[np.arange(bootstrap_indices[i]),classes_per_bootstrap[i]] = model.predict_proba(X[bootstrap_indices[i]])
+        all_predictions.append(predictions)
+
+    # Stack the predictions and convert to logits (n_samples, n_classes, n_models)    
+
+    stacked_predictions = np.dstack(all_predictions)
+    stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
+    mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
+    deviations = stacked_logits - mean_logits
+
+    # JUCAL calibration
+
+    best_NLL = np.inf
+    best_cs = (np.nan, np.nan)
+
+    for c1 in C1:
+        for c2 in C2:
+            adjusted = (mean_logits + c2 * deviations)/c1
+            probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+            NLL = metric(y, probs_jucal, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_cs = (c1, c2)
+
+    # Refined JUCAL calibration
+
+    c1_min = np.min(C1)
+    c2_min = np.min(C2)
+    c1_low = np.min((0.8*c1, c1_min))
+    c2_low = np.min((0.8*c2, c2_min))
+    c1_high = 1.2*c1
+    c2_high = 1.2*c2
+
+    best_NLL = np.inf
+    best_cs = (np.nan, np.nan)
+    C1_FINE = np.linspace(c1_low, c1_high, K)
+    C2_FINE = np.linspace(c2_low, c2_high, K)
+
+    for c1 in C1_FINE:
+        for c2 in C2_FINE:
+            adjusted = (mean_logits + c2 * deviations)/c1
+            probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+            NLL = metric(y, probs_jucal, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_cs = (c1, c2)
+
+    return best_NLL, best_cs
+
+def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_per_bootstrap):
+    all_predictions = []
+    for i, model in tqdm(enumerate(bootstrap_models)):
+        predictions = np.full((len(X), n_classes), np.nan)
+        predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+        all_predictions.append(predictions)
+
+    stacked_predictions = np.dstack(all_predictions)
+    stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
+    mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
+    deviations = stacked_logits - mean_logits
+    adjusted = (mean_logits + c2 * deviations)/c1
+
+    return softmax(adjusted)
+
+
+
