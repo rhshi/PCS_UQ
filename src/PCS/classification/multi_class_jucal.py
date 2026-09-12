@@ -2,6 +2,7 @@ import numpy as np
 import os
 import pickle
 import copy
+import math
 from tqdm import tqdm
 
 # Sklearn Imports
@@ -23,10 +24,25 @@ from src.metrics.classification_metrics import get_all_metrics
 from src.PCS.classification.multi_class_pcs import MultiClassPCS
 
 
-
 C1_COARSE = np.unique(np.append(np.linspace(0.3, 3.0, 50), 1.0))
 C2_COARSE = np.unique(np.append(np.linspace(0.0, 10.0, 50), 1.0))
 FINE_GRID_SIZE = 10
+
+
+def make_splits(indices, y, fractions, seed=42):
+    rng = np.random.default_rng(seed)
+    # Shuffle each class once so every larger training subset contains the smaller ones.
+    class_rows = [rng.permutation(indices[y[indices] == label]) for label in np.unique(y[indices])]
+
+    subsets = {}
+    for fraction in fractions:
+        rows_per_class = [rows[: max(1, math.ceil(fraction * rows.size))] for rows in class_rows]
+        subsets[fraction] = np.sort(np.concatenate(rows_per_class))
+
+    for smaller, larger in zip(fractions, fractions[1:]):
+        if not np.isin(subsets[smaller], subsets[larger]).all():
+            raise AssertionError("Row conditions are not nested")
+    return subsets
 
 
 class MultiClassPCS_JUCAL(MultiClassPCS):
@@ -35,7 +51,6 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         models,
         n_classes,
         num_bootstraps=100,
-        alpha=0.1,
         seed=42,
         top_k=1,
         save_path=None,
@@ -49,42 +64,46 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         Args:
             models: dictionary of model names and models
             num_bootstraps: number of bootstraps
-            alpha: significance level
             seed: random seed
             top_k: number of top models to use
             save_path: path to save the models
             load_models: whether to load the models from the save_path
             metric: metric to use for the prediction scores -- assume that higher is better
-            calibration_method: calibration method to use
         """
         self.models = {
             model_name: copy.deepcopy(model) for model_name, model in models.items()
         }
         self.num_bootstraps = num_bootstraps
-        self.alpha = alpha
         self.seed = seed
         self.top_k = top_k
         self.save_path = save_path
         self.load_models = load_models
         self.metric = metric
         self.val_size = val_size
-        # self.calibration_method = calibration_method
         self.n_classes = n_classes
         self.pred_scores = {model: np.inf for model in self.models}
 
-    def fit(self, X, y, alpha=None):
+    def fit(self, X, y):
         """
         Fit the models
         """
         le = LabelEncoder()
         y = le.fit_transform(y)
         self._label_encoder = le
-        if alpha is None:
-            alpha = self.alpha
-        self.alpha = alpha
-        X_train, X_calib, y_train, y_calib = train_test_split(
-            X, y, test_size=self.val_size, random_state=self.seed, stratify=y
-        )
+
+        train_inds = make_splits(np.array(range(len(y))), y, [1-self.val_size], seed=self.seed)[1-self.val_size]
+        val_inds = np.setdiff1d(range(len(y)), train_inds)
+        X_train = X[train_inds]
+        X_calib = X[val_inds]
+        y_train = y[train_inds]
+        y_calib = y[val_inds]
+
+        # X_train, X_calib, y_train, y_calib = train_test_split(
+        #     X, y, test_size=self.val_size, random_state=self.seed, stratify=y
+        # )
+
+        assert len(np.unique(y_train)) == len(np.unique(y))
+
         self._train(
             X_train, y_train
         )  # train the models such that they are ready for calibration, saved in self.models
@@ -93,7 +112,6 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         )  # check the predictions of the models, saved in self.models
         self.top_k_models = self._get_top_k()
         self._train_top_k(X, y)
-        # self.gamma, self.temperature = self.calibrate(X, y)
         self.best, (self.c1, self.c2) = self.calibrate(X, y)
 
     def _train_top_k(self, X, y):
@@ -162,8 +180,13 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
 
 
                     X_boot = X[bootstrap_indices]
-                    y_boot = y[bootstrap_indices]
-                    self._classes_per_bootstrap.append(np.unique(y_boot))
+                    y_boot_ = y[bootstrap_indices]
+                    self._classes_per_bootstrap.append(np.unique(y_boot_))
+
+                    # New label encodings in case y_boot_ does not include certain classes
+
+                    leb = LabelEncoder()
+                    y_boot = leb.fit_transform(y_boot_)
 
                     # Store OOB indices
                     self.oob_indices[model_name].append(oob_indices)
@@ -231,8 +254,8 @@ if __name__ == "__main__":
     )
     pcs_JUCAL = MultiClassPCS_JUCAL(
         models,
+        n_classes=len(np.unique(y)),
         num_bootstraps=500,
-        alpha=0.1,
         seed=42,
         top_k=1,
         save_path="./models",
@@ -241,4 +264,3 @@ if __name__ == "__main__":
     )
     pcs_JUCAL.fit(X_train, y_train)
     probs = pcs_JUCAL.predict(X_test)
-    # print(probs)

@@ -135,6 +135,7 @@ class MultiClassPCS:
         1. Predict the target using the models
         2. Calculate the prediction score for each model
         """
+
         for model in self.models:
             y_pred = self.models[model].predict_proba(X)
             self.pred_scores[model] = self.metric(y, y_pred, labels=range(self.n_classes))

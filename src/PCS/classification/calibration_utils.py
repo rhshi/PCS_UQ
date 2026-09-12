@@ -218,20 +218,23 @@ def JUCAL_calibration(X, y, bootstrap_indices, bootstrap_models, n_classes, clas
 
     all_predictions = []
     labels_ = range(0, n_classes)
-    print("number of classes", n_classes)
+    # print("number of classes", n_classes)
 
     for i, model in tqdm(enumerate(bootstrap_models)):
-        predictions = np.full((len(X), n_classes), np.nan)
+        # predictions = np.full((len(X), n_classes), np.nan)
+        predictions = np.full((len(X), n_classes), 0)
         bootstrap_preds = model.predict_proba(X[bootstrap_indices[i]])
         for j, idx in enumerate(bootstrap_indices[i]):
             predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
-        # predictions[np.arange(bootstrap_indices[i]),classes_per_bootstrap[i]] = model.predict_proba(X[bootstrap_indices[i]])
         all_predictions.append(predictions)
 
     # Stack the predictions and convert to logits (n_samples, n_classes, n_models)    
 
     stacked_predictions = np.dstack(all_predictions)
     stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
+
+    # print(stacked_predictions[0, :, :])
+
     mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
     deviations = stacked_logits - mean_logits
 

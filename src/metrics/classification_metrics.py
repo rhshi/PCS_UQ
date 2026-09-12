@@ -108,6 +108,10 @@ def process_empty_set(y_true, y_pred, empty_set):
 
 
 def get_uncertainties(ensemble):
+    """
+    Input: ensemble: (n_samples, n_classes, n_models)
+    Output: epistemic and aleatoric uncertainties: (n_samples)
+    """
 
     ensemble_mean = np.nanmean(ensemble, axis=2)
     Utotal = -np.sum(ensemble_mean * np.log(np.clip(ensemble_mean, 1e-12, 1.0)), axis=1)
