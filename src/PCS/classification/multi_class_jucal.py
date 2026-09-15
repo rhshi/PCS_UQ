@@ -213,7 +213,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         return JUCAL_calibration(
             X=X,
             y=y,
-            bootstrap_indices=self._flattened_oob_indices,
+            oob_indices=self._flattened_oob_indices,
             bootstrap_models=self._flattened_bootstrap_models,
             n_classes=self.n_classes,
             classes_per_bootstrap=self._classes_per_bootstrap,

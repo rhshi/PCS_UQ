@@ -203,12 +203,12 @@ def predict_APS_calibration(
     return prediction_sets
 
 
-def JUCAL_calibration(X, y, bootstrap_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K):
+def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K):
     """ 
     Args:
         X: features of the calibration set
         y: labels of the calibration set
-        bootstrap_indices: indices of the bootstrap samples
+        oob_indices: indices of the oob samples
         bootstrap_models: dictionary of bootstrap models
         C1: grid of coarse c1 values
         C2: grid of coarse c2 values
@@ -221,11 +221,12 @@ def JUCAL_calibration(X, y, bootstrap_indices, bootstrap_models, n_classes, clas
     # print("number of classes", n_classes)
 
     for i, model in tqdm(enumerate(bootstrap_models)):
-        # predictions = np.full((len(X), n_classes), np.nan)
-        predictions = np.full((len(X), n_classes), 0)
-        bootstrap_preds = model.predict_proba(X[bootstrap_indices[i]])
-        for j, idx in enumerate(bootstrap_indices[i]):
+        predictions = np.full((len(X), n_classes), np.nan)
+        bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+        for j, idx in enumerate(oob_indices[i]):
+            predictions[idx, :] = 1/(2*len(X)*(n_classes - len(classes_per_bootstrap[i])+1))
             predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+            predictions[idx, :] /= np.sum(predictions[idx, :])
         all_predictions.append(predictions)
 
     # Stack the predictions and convert to logits (n_samples, n_classes, n_models)    
