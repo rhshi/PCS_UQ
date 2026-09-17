@@ -9,6 +9,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.utils import resample
 from sklearn.datasets import make_classification
 from sklearn.metrics import log_loss
 from sklearn.base import clone
@@ -82,14 +83,19 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         self.val_size = val_size
         self.n_classes = n_classes
         self.pred_scores = {model: np.inf for model in self.models}
+        self.fill_val = None
 
-    def fit(self, X, y):
+    def fit(self, X, y, fill=True):
         """
         Fit the models
         """
         le = LabelEncoder()
         y = le.fit_transform(y)
         self._label_encoder = le
+
+        
+        if fill:
+            self.fill_val = 1/(2*len(y))
 
         train_inds = make_splits(np.array(range(len(y))), y, [1-self.val_size], seed=self.seed)[1-self.val_size]
         val_inds = np.setdiff1d(range(len(y)), train_inds)
@@ -137,12 +143,17 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                 bootstrap_seed = self.seed + i
                 # Try to load existing bootstrap model and OOB indices if enabled
                 model_path = (
-                    f"{self.save_path}/pcs_oob/{model_name}_model_seed_{bootstrap_seed}.pkl"
+                    f"{self.save_path}/pcs_jucal/{model_name}_model_seed_{bootstrap_seed}.pkl"
                     if self.save_path
                     else None
                 )
                 oob_path = (
-                    f"{self.save_path}/pcs_oob/{model_name}_oob_seed_{bootstrap_seed}.pkl"
+                    f"{self.save_path}/pcs_jucal/{model_name}_oob_seed_{bootstrap_seed}.pkl"
+                    if self.save_path
+                    else None
+                )
+                classes_path = (
+                    f"{self.save_path}/pcs_jucal/{model_name}_classes_seed_{bootstrap_seed}.pkl"
                     if self.save_path
                     else None
                 )
@@ -154,12 +165,16 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                     and os.path.exists(model_path)
                     and os.path.exists(oob_path)
                 ):
+                    
                     with open(model_path, "rb") as f:
                         bootstrap_model = pickle.load(f)
                     with open(oob_path, "rb") as f:
                         oob_indices = pickle.load(f)
+                    with open(classes_path, "rb") as f:
+                        unique_classes = pickle.load(f)
                     self.oob_indices[model_name].append(oob_indices)
                     self._flattened_oob_indices.append(oob_indices)
+                    self._classes_per_bootstrap.append(unique_classes)
                 else:
                     # Bootstrap the data
                     n_samples = len(X)
@@ -172,16 +187,24 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                     #     weights[i] = class_idx_to_freq[y[i]]
                     # weights = weights / weights.sum()
                     weights = weights / weights.sum()
-                    bootstrap_indices = np.random.choice(
-                        range(n_samples), size=n_samples, replace=True, p=weights
+
+                    bootstrap_indices = resample(
+                        range(n_samples), n_samples=n_samples, replace=True, random_state=bootstrap_seed, stratify=y
                     )
+
+                    # bootstrap_indices = np.random.choice(
+                    #     range(n_samples), size=n_samples, replace=True, p=weights
+                    # )
                     oob_indices = list(set(range(n_samples)) - set(bootstrap_indices))
 
 
 
                     X_boot = X[bootstrap_indices]
                     y_boot_ = y[bootstrap_indices]
-                    self._classes_per_bootstrap.append(np.unique(y_boot_))
+
+                    unique_classes = np.unique(y_boot_)
+
+                    self._classes_per_bootstrap.append(unique_classes)
 
                     # New label encodings in case y_boot_ does not include certain classes
 
@@ -202,6 +225,8 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                             pickle.dump(bootstrap_model, f)
                         with open(oob_path, "wb") as f:
                             pickle.dump(oob_indices, f)
+                        with open(classes_path, "wb") as f:
+                            pickle.dump(unique_classes, f)
 
                 # self.bootstrap_models[model_name].append(bootstrap_model)
                 self._flattened_bootstrap_models.append(bootstrap_model)
@@ -221,6 +246,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
             C1=C1_COARSE,
             C2=C2_COARSE,
             K=FINE_GRID_SIZE,
+            fill_val=self.fill_val,
         )
 
     def ensemble(self, X):
@@ -232,7 +258,8 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                 c1=self.c1,
                 c2=self.c2,
                 n_classes=self.n_classes,
-                classes_per_bootstrap=self._classes_per_bootstrap
+                classes_per_bootstrap=self._classes_per_bootstrap,
+                fill_val=self.fill_val,
             )
 
     def predict(self, X):

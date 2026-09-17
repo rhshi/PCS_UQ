@@ -11,12 +11,12 @@ def softmax(logits):
     Parameters:
     -----------
     logits : numpy.ndarray
-        Input logits, shape (n_samples, n_classes)
+        Input logits, shape (n_samples, n_classes, ...)
 
     Returns:
     --------
     numpy.ndarray
-        Probabilities after softmax, shape (n_samples, n_classes)
+        Probabilities after softmax, shape (n_samples, n_classes, ...)
     """
     # Subtract max for numerical stability
     exp_logits = np.exp(logits - np.max(logits, axis=1, keepdims=True))
@@ -203,7 +203,7 @@ def predict_APS_calibration(
     return prediction_sets
 
 
-def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K):
+def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K, fill_val):
     """ 
     Args:
         X: features of the calibration set
@@ -220,14 +220,33 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
     labels_ = range(0, n_classes)
     # print("number of classes", n_classes)
 
-    for i, model in tqdm(enumerate(bootstrap_models)):
-        predictions = np.full((len(X), n_classes), np.nan)
-        bootstrap_preds = model.predict_proba(X[oob_indices[i]])
-        for j, idx in enumerate(oob_indices[i]):
-            predictions[idx, :] = 1/(2*len(X)*(n_classes - len(classes_per_bootstrap[i])+1))
-            predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
-            predictions[idx, :] /= np.sum(predictions[idx, :])
-        all_predictions.append(predictions)
+    print("Calibrating models")
+
+    if fill_val is None:
+
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+
+            bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+        
+            for j, idx in enumerate(oob_indices[i]):
+                # print(bootstrap_preds[j])
+                predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+                predictions[idx, :] /= np.nansum(predictions[idx, :])
+            all_predictions.append(predictions)
+
+    else:
+        
+
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+            bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+
+            for j, idx in enumerate(oob_indices[i]):
+                predictions[idx, :] = fill_val/(n_classes - len(classes_per_bootstrap[i])+1)
+                predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+                predictions[idx, :] /= np.sum(predictions[idx, :])
+            all_predictions.append(predictions)
 
     # Stack the predictions and convert to logits (n_samples, n_classes, n_models)    
 
@@ -236,7 +255,13 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
 
     # print(stacked_predictions[0, :, :])
 
+    # print(np.isnan(stacked_logits))
+
     mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
+
+    # print(stacked_predictions[97, 1, :])
+    # print(np.argwhere(np.isnan(mean_logits)))
+
     deviations = stacked_logits - mean_logits
 
     # JUCAL calibration
@@ -257,8 +282,8 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
 
     c1_min = np.min(C1)
     c2_min = np.min(C2)
-    c1_low = np.min((0.8*c1, c1_min))
-    c2_low = np.min((0.8*c2, c2_min))
+    c1_low = np.max((0.8*c1, c1_min))
+    c2_low = np.max((0.8*c2, c2_min))
     c1_high = 1.2*c1
     c2_high = 1.2*c2
 
@@ -278,12 +303,21 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
 
     return best_NLL, best_cs
 
-def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_per_bootstrap):
+def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_per_bootstrap, fill_val):
     all_predictions = []
-    for i, model in tqdm(enumerate(bootstrap_models)):
-        predictions = np.full((len(X), n_classes), np.nan)
-        predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
-        all_predictions.append(predictions)
+
+    if fill_val is None:
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+            predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+            predictions /= np.nansum(predictions, axis=1, keepdims=True)
+            all_predictions.append(predictions)
+    else:
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), fill_val/(n_classes - len(classes_per_bootstrap[i])+1))
+            predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+            predictions /= np.sum(predictions, axis=1, keepdims=True)
+            all_predictions.append(predictions)
 
     stacked_predictions = np.dstack(all_predictions)
     stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))

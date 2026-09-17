@@ -114,10 +114,11 @@ def get_uncertainties(ensemble):
     """
 
     ensemble_clipped = np.clip(ensemble, 1e-12, 1.0)
+    ensemble_clipped /= np.nansum(ensemble_clipped, axis=1, keepdims=True)
 
     ensemble_mean = np.nanmean(ensemble_clipped, axis=2)
-    Utotal = -np.sum(ensemble_mean * np.log(ensemble_mean), axis=1)
-    Ualeatoric = np.nanmean(-np.sum(ensemble_clipped*np.log(ensemble_clipped), axis=1), axis=1)
+    Utotal = -np.nansum(ensemble_mean * np.log(ensemble_mean), axis=1)
+    Ualeatoric = np.nanmean(-np.nansum(ensemble_clipped*np.log(ensemble_clipped), axis=1), axis=1)
     Uepistemic = Utotal-Ualeatoric
 
     return Uepistemic, Ualeatoric
