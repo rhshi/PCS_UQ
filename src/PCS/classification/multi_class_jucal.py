@@ -20,6 +20,8 @@ from sklearn.preprocessing import LabelEncoder
 from src.PCS.classification.calibration_utils import (
     JUCAL_calibration,
     ensemble_JUCAL_calibration,
+    calibrate_then_pool,
+    ensemble_calibrate_then_pool,
 )
 from src.metrics.classification_metrics import get_all_metrics
 from src.PCS.classification.multi_class_pcs import MultiClassPCS
@@ -32,7 +34,8 @@ FINE_GRID_SIZE = 10
 
 def make_splits(indices, y, fractions, seed=42):
     rng = np.random.default_rng(seed)
-    # Shuffle each class once so every larger training subset contains the smaller ones.
+    # Shuffle each class once so every larger training subset contains the smaller ones
+    # Also stratifying
     class_rows = [rng.permutation(indices[y[indices] == label]) for label in np.unique(y[indices])]
 
     subsets = {}
@@ -58,6 +61,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         load_models=True,
         metric=log_loss,
         val_size=0.25,
+        calibration_method="jucal",
     ):
         """
         MultiClassPCS_JUCAL
@@ -84,6 +88,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         self.n_classes = n_classes
         self.pred_scores = {model: np.inf for model in self.models}
         self.fill_val = None
+        self.calibration_method = calibration_method
 
     def fit(self, X, y, fill=True):
         """
@@ -118,7 +123,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         )  # check the predictions of the models, saved in self.models
         self.top_k_models = self._get_top_k()
         self._train_top_k(X, y)
-        self.best, (self.c1, self.c2) = self.calibrate(X, y)
+        self.best, self.cs = self.calibrate(X, y)
 
     def _train_top_k(self, X, y):
         """
@@ -143,17 +148,17 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                 bootstrap_seed = self.seed + i
                 # Try to load existing bootstrap model and OOB indices if enabled
                 model_path = (
-                    f"{self.save_path}/pcs_jucal/{model_name}_model_seed_{bootstrap_seed}.pkl"
+                    f"{self.save_path}/pcs_jucal/models/{model_name}_model_seed_{bootstrap_seed}.pkl"
                     if self.save_path
                     else None
                 )
                 oob_path = (
-                    f"{self.save_path}/pcs_jucal/{model_name}_oob_seed_{bootstrap_seed}.pkl"
+                    f"{self.save_path}/pcs_jucal/oob_indices/{model_name}_oob_seed_{bootstrap_seed}.pkl"
                     if self.save_path
                     else None
                 )
                 classes_path = (
-                    f"{self.save_path}/pcs_jucal/{model_name}_classes_seed_{bootstrap_seed}.pkl"
+                    f"{self.save_path}/pcs_jucal/classes/{model_name}_classes_seed_{bootstrap_seed}.pkl"
                     if self.save_path
                     else None
                 )
@@ -164,6 +169,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                     and model_path
                     and os.path.exists(model_path)
                     and os.path.exists(oob_path)
+                    and os.path.exists(classes_path)
                 ):
                     
                     with open(model_path, "rb") as f:
@@ -188,13 +194,14 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                     # weights = weights / weights.sum()
                     weights = weights / weights.sum()
 
-                    bootstrap_indices = resample(
-                        range(n_samples), n_samples=n_samples, replace=True, random_state=bootstrap_seed, stratify=y
-                    )
-
-                    # bootstrap_indices = np.random.choice(
-                    #     range(n_samples), size=n_samples, replace=True, p=weights
+                    # bootstrap_indices = resample(
+                    #     range(n_samples), n_samples=n_samples, replace=True, random_state=bootstrap_seed, stratify=y
                     # )
+
+                    rng = np.random.default_rng(bootstrap_seed)
+                    bootstrap_indices = rng.choice(
+                        range(n_samples), size=n_samples, replace=True, p=weights
+                    )
                     oob_indices = list(set(range(n_samples)) - set(bootstrap_indices))
 
 
@@ -235,32 +242,81 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
     def calibrate(self, X, y):
         # JUCAL calibration
 
-        return JUCAL_calibration(
-            X=X,
-            y=y,
-            oob_indices=self._flattened_oob_indices,
-            bootstrap_models=self._flattened_bootstrap_models,
-            n_classes=self.n_classes,
-            classes_per_bootstrap=self._classes_per_bootstrap,
-            metric=self.metric,
-            C1=C1_COARSE,
-            C2=C2_COARSE,
-            K=FINE_GRID_SIZE,
-            fill_val=self.fill_val,
+        calib_path = (
+            f"{self.save_path}/pcs_jucal/{self.calibration_method}/calibrations.pkl"
+            if self.save_path
+            else None
         )
+
+        if (
+            self.load_models
+            and os.path.exists(calib_path)
+        ):
+            with open(calib_path, "rb") as f:
+                best_NLL, best_cs = pickle.load(f)
+
+        else:
+            if self.calibration_method == "jucal":
+                best_NLL, best_cs = JUCAL_calibration(
+                    X=X,
+                    y=y,
+                    oob_indices=self._flattened_oob_indices,
+                    bootstrap_models=self._flattened_bootstrap_models,
+                    n_classes=self.n_classes,
+                    classes_per_bootstrap=self._classes_per_bootstrap,
+                    metric=self.metric,
+                    C1=C1_COARSE,
+                    C2=C2_COARSE,
+                    K=FINE_GRID_SIZE,
+                    fill_val=self.fill_val,
+                )
+
+            elif self.calibration_method == "ctp":
+                best_NLL, best_cs = calibrate_then_pool(
+                    X=X,
+                    y=y,
+                    oob_indices=self._flattened_oob_indices,
+                    bootstrap_models=self._flattened_bootstrap_models,
+                    n_classes=self.n_classes,
+                    classes_per_bootstrap=self._classes_per_bootstrap,
+                    metric=self.metric,
+                    C1=C1_COARSE,
+                    K=FINE_GRID_SIZE,
+                    fill_val=self.fill_val,
+                )
+
+            if calib_path:
+                os.makedirs(os.path.dirname(calib_path), exist_ok=True)
+                with open(calib_path, "wb") as f:
+                    pickle.dump((best_NLL, best_cs), f)
+
+        return best_NLL, best_cs
 
     def ensemble(self, X):
         # Explicitly output the ensemble (n_samples, n_classes, n_models)
 
-        return ensemble_JUCAL_calibration(
+        if self.calibration_method == "jucal":
+            return ensemble_JUCAL_calibration(
                 X=X,
                 bootstrap_models=self._flattened_bootstrap_models,
-                c1=self.c1,
-                c2=self.c2,
+                c1=self.cs[0],
+                c2=self.cs[1],
                 n_classes=self.n_classes,
                 classes_per_bootstrap=self._classes_per_bootstrap,
                 fill_val=self.fill_val,
             )
+
+
+        elif self.calibration_method == "ctp":
+            return ensemble_calibrate_then_pool(
+                X=X,
+                bootstrap_models=self._flattened_bootstrap_models,
+                c1=self.cs,
+                n_classes=self.n_classes,
+                classes_per_bootstrap=self._classes_per_bootstrap,
+                fill_val=self.fill_val,
+            )
+
 
     def predict(self, X):
         return np.nanmean(self.ensemble(X), axis=2)

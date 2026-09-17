@@ -280,6 +280,8 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
 
     # Refined JUCAL calibration
 
+    c1, c2 = best_cs
+
     c1_min = np.min(C1)
     c2_min = np.min(C2)
     c1_low = np.max((0.8*c1, c1_min))
@@ -328,4 +330,184 @@ def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_p
     return softmax(adjusted)
 
 
+def calibrate_then_pool(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, K, fill_val):
+    all_predictions = []
+    labels_ = range(0, n_classes)
+    # print("number of classes", n_classes)
 
+    print("Calibrating models")
+
+    if fill_val is None:
+
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+
+            bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+        
+            for j, idx in enumerate(oob_indices[i]):
+                # print(bootstrap_preds[j])
+                predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+                predictions[idx, :] /= np.nansum(predictions[idx, :])
+            all_predictions.append(predictions)
+
+    else:
+        
+
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+            bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+
+            for j, idx in enumerate(oob_indices[i]):
+                predictions[idx, :] = fill_val/(n_classes - len(classes_per_bootstrap[i])+1)
+                predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+                predictions[idx, :] /= np.sum(predictions[idx, :])
+            all_predictions.append(predictions)
+
+
+    stacked_predictions = np.dstack(all_predictions)
+    stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
+
+    best_NLL = np.inf
+    best_c1 = np.nan
+
+    for c1 in C1:
+        adjusted = stacked_logits / c1
+        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+        NLL = metric(y, probs_jucal, labels=labels_)
+        if NLL < best_NLL:
+            best_NLL = NLL
+            best_c1 = c1
+
+    c1 = best_c1
+    
+    c1_min = np.min(C1)
+    c1_low = np.max((0.8*c1, c1_min))
+    c1_high = 1.2*c1
+
+    best_NLL = np.inf
+    best_c1 = np.nan
+    C1_FINE = np.linspace(c1_low, c1_high, K)
+
+    for c1 in C1_FINE:
+        adjusted = stacked_logits / c1
+        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+        NLL = metric(y, probs_jucal, labels=labels_)
+        if NLL < best_NLL:
+            best_NLL = NLL
+            best_c1 = c1
+
+    return best_NLL, best_c1
+
+def ensemble_calibrate_then_pool(X, bootstrap_models, c1, n_classes, classes_per_bootstrap, fill_val):
+    all_predictions = []
+
+    if fill_val is None:
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), np.nan)
+            predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+            predictions /= np.nansum(predictions, axis=1, keepdims=True)
+            all_predictions.append(predictions)
+    else:
+        for i, model in tqdm(enumerate(bootstrap_models)):
+            predictions = np.full((len(X), n_classes), fill_val/(n_classes - len(classes_per_bootstrap[i])+1))
+            predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+            predictions /= np.sum(predictions, axis=1, keepdims=True)
+            all_predictions.append(predictions)
+
+    stacked_predictions = np.dstack(all_predictions)
+    stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
+    adjusted = stacked_logits / c1
+
+    return softmax(adjusted)
+
+
+# def pool_then_calibrate(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, K, fill_val):
+#     all_predictions = []
+#     labels_ = range(0, n_classes)
+#     # print("number of classes", n_classes)
+
+#     print("Calibrating models")
+
+#     if fill_val is None:
+
+#         for i, model in tqdm(enumerate(bootstrap_models)):
+#             predictions = np.full((len(X), n_classes), np.nan)
+
+#             bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+        
+#             for j, idx in enumerate(oob_indices[i]):
+#                 # print(bootstrap_preds[j])
+#                 predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+#                 predictions[idx, :] /= np.nansum(predictions[idx, :])
+#             all_predictions.append(predictions)
+
+#     else:
+#         for i, model in tqdm(enumerate(bootstrap_models)):
+#             predictions = np.full((len(X), n_classes), np.nan)
+#             bootstrap_preds = model.predict_proba(X[oob_indices[i]])
+
+#             for j, idx in enumerate(oob_indices[i]):
+#                 predictions[idx, :] = fill_val/(n_classes - len(classes_per_bootstrap[i])+1)
+#                 predictions[idx, classes_per_bootstrap[i]] = bootstrap_preds[j]
+#                 predictions[idx, :] /= np.sum(predictions[idx, :])
+#             all_predictions.append(predictions)
+
+
+#     stacked_predictions = np.dstack(all_predictions)
+#     mean_predictions = np.nanmean(stacked_predictions, axis=2)
+#     mean_logits = np.log(np.clip(mean_predictions, 1e-12, 1.0))
+
+#     best_NLL = np.inf
+#     best_c1 = np.nan
+
+#     for c1 in C1:
+#         adjusted = mean_logits / c1
+#         probs_jucal = softmax(adjusted)
+#         NLL = metric(y, probs_jucal, labels=labels_)
+#         if NLL < best_NLL:
+#             best_NLL = NLL
+#             best_c1 = c1
+
+#     c1 = best_c1
+    
+#     c1_min = np.min(C1)
+#     c1_low = np.max((0.8*c1, c1_min))
+#     c1_high = 1.2*c1
+
+#     best_NLL = np.inf
+#     best_c1 = np.nan
+#     C1_FINE = np.linspace(c1_low, c1_high, K)
+
+#     for c1 in C1_FINE:
+#         adjusted = mean_logits / c1
+#         probs_jucal = softmax(adjusted)
+#         NLL = metric(y, probs_jucal, labels=labels_)
+#         if NLL < best_NLL:
+#             best_NLL = NLL
+#             best_c1 = c1
+
+#     return best_NLL, best_c1
+
+
+# def ensemble_pool_then_calibrate(X, bootstrap_models, c1, n_classes, classes_per_bootstrap, fill_val):
+#     all_predictions = []
+
+#     if fill_val is None:
+#         for i, model in tqdm(enumerate(bootstrap_models)):
+#             predictions = np.full((len(X), n_classes), np.nan)
+#             predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+#             predictions /= np.nansum(predictions, axis=1, keepdims=True)
+#             all_predictions.append(predictions)
+#     else:
+#         for i, model in tqdm(enumerate(bootstrap_models)):
+#             predictions = np.full((len(X), n_classes), fill_val/(n_classes - len(classes_per_bootstrap[i])+1))
+#             predictions[:, classes_per_bootstrap[i]] = model.predict_proba(X)
+#             predictions /= np.sum(predictions, axis=1, keepdims=True)
+#             all_predictions.append(predictions)
+
+#     stacked_predictions = np.dstack(all_predictions)
+#     mean_predictions = np.nanmean(stacked_predictions, axis=2)
+#     mean_logits = np.log(np.clip(mean_predictions, 1e-12, 1.0))
+#     adjusted = mean_logits / c1
+
+#     return softmax(adjusted)
