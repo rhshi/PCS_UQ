@@ -35,10 +35,6 @@ def create_model(num_classes):
 def create_train_utils(model, lr=0.1, momentum=0.9, weight_decay=1e-4, T_max=200):
     criterion = nn.CrossEntropyLoss()
 
-    # lr = 0.1
-    # momentum = 0.9
-    # weight_decay = 1e-4
-
     optimizer = torch.optim.SGD(model.parameters(), lr,
                                     momentum=momentum,
                                     weight_decay=weight_decay)

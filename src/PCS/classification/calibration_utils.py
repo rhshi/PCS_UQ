@@ -203,7 +203,7 @@ def predict_APS_calibration(
     return prediction_sets
 
 
-def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K, fill_val):
+def JUCAL_calibration_oob(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, C2, K, fill_val):
     """ 
     Args:
         X: features of the calibration set
@@ -305,7 +305,7 @@ def JUCAL_calibration(X, y, oob_indices, bootstrap_models, n_classes, classes_pe
 
     return best_NLL, best_cs
 
-def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_per_bootstrap, fill_val):
+def ensemble_JUCAL_calibration_oob(X, bootstrap_models, c1, c2, n_classes, classes_per_bootstrap, fill_val):
     all_predictions = []
 
     if fill_val is None:
@@ -330,7 +330,7 @@ def ensemble_JUCAL_calibration(X, bootstrap_models, c1, c2, n_classes, classes_p
     return softmax(adjusted)
 
 
-def calibrate_then_pool(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, K, fill_val):
+def calibrate_then_pool_oob(X, y, oob_indices, bootstrap_models, n_classes, classes_per_bootstrap, metric, C1, K, fill_val):
     all_predictions = []
     labels_ = range(0, n_classes)
     # print("number of classes", n_classes)
@@ -398,7 +398,7 @@ def calibrate_then_pool(X, y, oob_indices, bootstrap_models, n_classes, classes_
 
     return best_NLL, best_c1
 
-def ensemble_calibrate_then_pool(X, bootstrap_models, c1, n_classes, classes_per_bootstrap, fill_val):
+def ensemble_calibrate_then_pool_oob(X, bootstrap_models, c1, n_classes, classes_per_bootstrap, fill_val):
     all_predictions = []
 
     if fill_val is None:
@@ -511,3 +511,144 @@ def ensemble_calibrate_then_pool(X, bootstrap_models, c1, n_classes, classes_per
 #     adjusted = mean_logits / c1
 
 #     return softmax(adjusted)
+
+def JUCAL_calibration_deep(X, y, models, n_classes, metric, C1, C2, K):
+    """ 
+    Args:
+        X: features of the calibration set
+        y: labels of the calibration set
+        models: dictionary of models
+        C1: grid of coarse c1 values
+        C2: grid of coarse c2 values
+        K: number of values in refined grid
+    """
+
+
+    all_logits = []
+    labels_ = range(0, n_classes)
+
+    print("Calibrating models")
+
+    for i, model in tqdm(enumerate(models)):
+        model.eval()
+        logits = model(X).cpu().numpy()
+        all_logits.append(logits)
+
+    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
+    deviations = stacked_logits - mean_logits
+
+    # JUCAL calibration
+
+    best_NLL = np.inf
+    best_cs = (np.nan, np.nan)
+
+    for c1 in C1:
+        for c2 in C2:
+            adjusted = (mean_logits + c2 * deviations)/c1
+            probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+            NLL = metric(y, probs_jucal, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_cs = (c1, c2)
+
+    # Refined JUCAL calibration
+
+    c1, c2 = best_cs
+
+    c1_min = np.min(C1)
+    c2_min = np.min(C2)
+    c1_low = np.max((0.8*c1, c1_min))
+    c2_low = np.max((0.8*c2, c2_min))
+    c1_high = 1.2*c1
+    c2_high = 1.2*c2
+
+    best_NLL = np.inf
+    best_cs = (np.nan, np.nan)
+    C1_FINE = np.linspace(c1_low, c1_high, K)
+    C2_FINE = np.linspace(c2_low, c2_high, K)
+
+    for c1 in C1_FINE:
+        for c2 in C2_FINE:
+            adjusted = (mean_logits + c2 * deviations)/c1
+            probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+            NLL = metric(y, probs_jucal, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_cs = (c1, c2)
+
+    return best_NLL, best_cs
+
+
+def ensemble_JUCAL_calibration_deep(X, models, c1, c2):
+    all_logits = []
+    for i, model in tqdm(enumerate(models)):
+        model.eval()
+        logits = model(X).cpu().numpy()
+        all_logits.append(logits)
+
+    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
+    deviations = stacked_logits - mean_logits
+    adjusted = (mean_logits + c2 * deviations)/c1
+
+    return softmax(adjusted)
+
+def calibrate_then_pool_deep(X, y, models, n_classes, metric, C1, K):
+    all_logits = []
+    labels_ = range(0, n_classes)
+    # print("number of classes", n_classes)
+
+    print("Calibrating models")
+        
+    for i, model in tqdm(enumerate(models)):
+        model.eval()
+        logits = model(X).cpu().numpy()
+        all_logits.append(logits)
+
+
+    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+
+    best_NLL = np.inf
+    best_c1 = np.nan
+
+    for c1 in C1:
+        adjusted = stacked_logits / c1
+        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+        NLL = metric(y, probs_jucal, labels=labels_)
+        if NLL < best_NLL:
+            best_NLL = NLL
+            best_c1 = c1
+
+    c1 = best_c1
+    
+    c1_min = np.min(C1)
+    c1_low = np.max((0.8*c1, c1_min))
+    c1_high = 1.2*c1
+
+    best_NLL = np.inf
+    best_c1 = np.nan
+    C1_FINE = np.linspace(c1_low, c1_high, K)
+
+    for c1 in C1_FINE:
+        adjusted = stacked_logits / c1
+        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+        NLL = metric(y, probs_jucal, labels=labels_)
+        if NLL < best_NLL:
+            best_NLL = NLL
+            best_c1 = c1
+
+    return best_NLL, best_c1
+
+def ensemble_calibrate_then_pool_deep(X, models, c1):
+    all_logits = []
+
+    for i, model in tqdm(enumerate(models)):
+        model.eval()
+        logits = model(X).cpu().numpy()
+        all_logits.append(logits)
+
+    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    adjusted = stacked_logits / c1
+
+    return softmax(adjusted)

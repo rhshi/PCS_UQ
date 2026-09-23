@@ -18,10 +18,14 @@ from sklearn.preprocessing import LabelEncoder
 
 # JUCAL Imports
 from src.PCS.classification.calibration_utils import (
-    JUCAL_calibration,
-    ensemble_JUCAL_calibration,
-    calibrate_then_pool,
-    ensemble_calibrate_then_pool,
+    JUCAL_calibration_oob,
+    ensemble_JUCAL_calibration_oob,
+    calibrate_then_pool_oob,
+    ensemble_calibrate_then_pool_oob,
+    JUCAL_calibration_deep,
+    ensemble_JUCAL_calibration_deep,
+    calibrate_then_pool_deep,
+    ensemble_calibrate_then_pool_deep,
 )
 from src.metrics.classification_metrics import get_all_metrics
 from src.PCS.classification.multi_class_pcs import MultiClassPCS
@@ -257,7 +261,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
 
         else:
             if self.calibration_method == "jucal":
-                best_NLL, best_cs = JUCAL_calibration(
+                best_NLL, best_cs = JUCAL_calibration_oob(
                     X=X,
                     y=y,
                     oob_indices=self._flattened_oob_indices,
@@ -272,7 +276,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
                 )
 
             elif self.calibration_method == "ctp":
-                best_NLL, best_cs = calibrate_then_pool(
+                best_NLL, best_cs = calibrate_then_pool_oob(
                     X=X,
                     y=y,
                     oob_indices=self._flattened_oob_indices,
@@ -296,7 +300,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
         # Explicitly output the ensemble (n_samples, n_classes, n_models)
 
         if self.calibration_method == "jucal":
-            return ensemble_JUCAL_calibration(
+            return ensemble_JUCAL_calibration_oob(
                 X=X,
                 bootstrap_models=self._flattened_bootstrap_models,
                 c1=self.cs[0],
@@ -308,7 +312,7 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
 
 
         elif self.calibration_method == "ctp":
-            return ensemble_calibrate_then_pool(
+            return ensemble_calibrate_then_pool_oob(
                 X=X,
                 bootstrap_models=self._flattened_bootstrap_models,
                 c1=self.cs,
@@ -320,6 +324,168 @@ class MultiClassPCS_JUCAL(MultiClassPCS):
 
     def predict(self, X):
         return np.nanmean(self.ensemble(X), axis=2)
+
+
+import torch
+from experiments.scripts.train_models import create_model
+
+
+class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
+    """
+    We are assuming a pretrained model.  
+    """
+    def __init__(
+        self,
+        model_path,
+        num_classes,
+        ensemble_size=100,
+        seed=42,
+        metric=log_loss,
+        calibration_method="jucal",
+    ):
+
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+        # model_dict = torch.load(model_path)
+        # self.model = create_model(num_classes).to(self.device)
+        # self.model.load_state_dict(model_dict["state_dict"])
+        # self.model.eval()
+
+        self.num_classes = num_classes
+        self.ensemble_size = ensemble_size
+        self.seed = seed
+        self.metric = metric
+        self.calibration_method = calibration_method
+
+
+    def create_ensemble(self, model, method):
+        """
+        Create ensemble for pretrained ResNet18 model
+        """
+
+        self.models = []
+        model.eval()
+        g = torch.Generator()
+
+        if method == "perturb":
+            # These don't change the batch norm layers (initialization is deterministic so variance is zero)
+
+            for i in range(self.ensemble_size-1):
+                state_dict = model.state_dict().copy()
+                for i, (name, param) in enumerate(state_dict.items()):
+                    if ("conv" in name) or ("downsample.0" in name):
+                        g.manual_seed(self.seed+i)
+                        new_param = param + torch.normal(0, 2/(param.size()[0]*param.size()[2]**2), size=param.size(), generator=g)
+                    elif "fc" in name:
+                        g.manual_seed(self.seed+i)
+                        new_param = param + torch.normal(0, 1/(3*512), size=param.size(), generator=g)
+                    else:
+                        new_param = param
+                    state_dict[name] = new_param
+
+            new_model = copy.deepcopy(model)
+            new_model.load_state_dict(state_dict)
+
+            new_model.eval()
+
+            self.models.append(new_model)
+                
+        elif method == "dropout":
+            # These can change the batchnorm layers (because they are trainable)
+
+            for i in range(self.ensemble_size-1):
+                state_dict = model.state_dict().copy()
+                for i, (name, param) in enumerate(model.parameters()):
+                    if param.requires_grad:
+                        g.manual_seed(self.seed+i)
+                        drop_probs = torch.abs(param)/torch.sum(torch.abs(param))
+                        new_param = (torch.rand(size=param.size(), generator=g) >= drop_probs).long()*param
+                    else:
+                        new_param = param
+                    state_dict[name] = new_param
+
+            new_model = copy.deepcopy(model)
+            new_model.load_state_dict(state_dict)
+
+            new_model.eval()
+
+            self.models.append(new_model)
+
+
+    def calibrate(self, X, y):
+        # JUCAL calibration
+
+        calib_path = (
+            f"{self.save_path}/jucal/{self.calibration_method}/calibrations.pkl"
+            if self.save_path
+            else None
+        )
+
+        if (
+            self.load_models
+            and os.path.exists(calib_path)
+        ):
+            with open(calib_path, "rb") as f:
+                best_NLL, best_cs = pickle.load(f)
+
+        else:
+            if self.calibration_method == "jucal":
+                best_NLL, best_cs = JUCAL_calibration_deep(
+                    X=X,
+                    y=y,
+                    models=self.models,
+                    n_classes=self.n_classes,
+                    metric=self.metric,
+                    C1=C1_COARSE,
+                    C2=C2_COARSE,
+                    K=FINE_GRID_SIZE,
+                )
+
+            elif self.calibration_method == "ctp":
+                best_NLL, best_cs = calibrate_then_pool_deep(
+                    X=X,
+                    y=y,
+                    models=self.models,
+                    n_classes=self.n_classes,
+                    metric=self.metric,
+                    C1=C1_COARSE,
+                    K=FINE_GRID_SIZE,
+                )
+
+            if calib_path:
+                os.makedirs(os.path.dirname(calib_path), exist_ok=True)
+                with open(calib_path, "wb") as f:
+                    pickle.dump((best_NLL, best_cs), f)
+
+        return best_NLL, best_cs
+
+    def ensemble(self, X):
+        # Explicitly output the ensemble (n_samples, n_classes, n_models)
+
+        if self.calibration_method == "jucal":
+            return ensemble_JUCAL_calibration_deep(
+                X=X,
+                mdoels=self.models,
+                c1=self.cs[0],
+                c2=self.cs[1],
+            )
+
+
+        elif self.calibration_method == "ctp":
+            return ensemble_calibrate_then_pool_oob(
+                X=X,
+                bootstrap_models=self.models,
+                c1=self.cs,
+                )
+
+    def predict(self, X):
+        return np.nanmean(self.ensemble(X), axis=2)
+        
+    
+
+
+        
+
 
 
 if __name__ == "__main__":
