@@ -95,7 +95,7 @@ if __name__ == "__main__":
                     'best_prec1': best_prec1,
                     'optimizer' : optimizer.state_dict(),
                     'lr_scheduler' : lr_scheduler.state_dict(),
-                }, filename=os.path.join(save_dir, 'checkpoint.pt'))
+                }, filename=os.path.join(save_dir, f"epoch_{epoch}_checkpoint.pt"))
 
             save_checkpoint({
                 'epoch': epoch,

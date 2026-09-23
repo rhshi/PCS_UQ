@@ -29,8 +29,10 @@ class CIFAR100(torch.utils.data.Dataset):
         self.in_str = "img"
         self.out_str = "fine_label"
 
+        self.samples = []
         self.labels = []
         for i in range(len(self.data)):
+          self.samples.append(self.data[i][self.in_str])
           self.labels.append(self.data[i][self.out_str])
 
         self.num_classes = len(np.unique(self.labels))
@@ -54,8 +56,10 @@ class TinyImageNet(torch.utils.data.Dataset):
         self.in_str = "image"
         self.out_str = "label"
 
+        self.samples = []
         self.labels = []
         for i in range(len(self.data)):
+          self.samples.append(self.data[i][self.in_str])
           self.labels.append(self.data[i][self.out_str])
 
         self.num_classes = len(np.unique(self.labels))
@@ -81,8 +85,10 @@ class CaltechBirds(torch.utils.data.Dataset):
         self.in_str = "image"
         self.out_str = "label"
 
+        self.samples = []
         self.labels = []
         for i in range(len(self.data)):
+          self.samples.append(self.data[i][self.in_str])
           self.labels.append(self.data[i][self.out_str])
 
         self.num_classes = len(np.unique(self.labels))

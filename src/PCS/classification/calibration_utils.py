@@ -512,7 +512,7 @@ def ensemble_calibrate_then_pool_oob(X, bootstrap_models, c1, n_classes, classes
 
 #     return softmax(adjusted)
 
-def JUCAL_calibration_deep(X, y, models, n_classes, metric, C1, C2, K):
+def JUCAL_calibration_deep(y, stacked_logits, n_classes, metric, C1, C2, K):
     """ 
     Args:
         X: features of the calibration set
@@ -524,17 +524,17 @@ def JUCAL_calibration_deep(X, y, models, n_classes, metric, C1, C2, K):
     """
 
 
-    all_logits = []
+    # all_logits = []
     labels_ = range(0, n_classes)
 
     print("Calibrating models")
 
-    for i, model in tqdm(enumerate(models)):
-        model.eval()
-        logits = model(X).cpu().numpy()
-        all_logits.append(logits)
+    # for i, model in tqdm(enumerate(models)):
+    #     model.eval()
+    #     logits = model(X).cpu().numpy()
+    #     all_logits.append(logits)
 
-    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    # stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
     mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
     deviations = stacked_logits - mean_logits
 
@@ -580,34 +580,33 @@ def JUCAL_calibration_deep(X, y, models, n_classes, metric, C1, C2, K):
     return best_NLL, best_cs
 
 
-def ensemble_JUCAL_calibration_deep(X, models, c1, c2):
-    all_logits = []
-    for i, model in tqdm(enumerate(models)):
-        model.eval()
-        logits = model(X).cpu().numpy()
-        all_logits.append(logits)
+def ensemble_JUCAL_calibration_deep(stacked_logits, c1, c2):
+    # all_logits = []
+    # for i, model in tqdm(enumerate(models)):
+    #     model.eval()
+    #     logits = model(X).cpu().numpy()
+    #     all_logits.append(logits)
 
-    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    # stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
     mean_logits = np.nanmean(stacked_logits, axis=2, keepdims=True)
     deviations = stacked_logits - mean_logits
     adjusted = (mean_logits + c2 * deviations)/c1
 
     return softmax(adjusted)
 
-def calibrate_then_pool_deep(X, y, models, n_classes, metric, C1, K):
-    all_logits = []
+def calibrate_then_pool_deep(y, stacked_logits, n_classes, metric, C1, K):
+    # all_logits = []
     labels_ = range(0, n_classes)
     # print("number of classes", n_classes)
 
     print("Calibrating models")
-        
-    for i, model in tqdm(enumerate(models)):
-        model.eval()
-        logits = model(X).cpu().numpy()
-        all_logits.append(logits)
+    # for i, model in tqdm(enumerate(models)):
+    #     model.eval()
+    #     logits = model(X).cpu().numpy()
+    #     all_logits.append(logits)
 
 
-    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    # stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
 
     best_NLL = np.inf
     best_c1 = np.nan
@@ -640,15 +639,7 @@ def calibrate_then_pool_deep(X, y, models, n_classes, metric, C1, K):
 
     return best_NLL, best_c1
 
-def ensemble_calibrate_then_pool_deep(X, models, c1):
-    all_logits = []
-
-    for i, model in tqdm(enumerate(models)):
-        model.eval()
-        logits = model(X).cpu().numpy()
-        all_logits.append(logits)
-
-    stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+def ensemble_calibrate_then_pool_deep(stacked_logits, c1):
     adjusted = stacked_logits / c1
 
     return softmax(adjusted)
