@@ -336,12 +336,15 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
     """
     def __init__(
         self,
-        model_path,
+        model,
         num_classes,
         ensemble_size=100,
         seed=42,
         metric=log_loss,
         calibration_method="jucal",
+        method="perturb",
+        save_path=None,
+        load_models=True,
     ):
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -350,73 +353,95 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
         # self.model = create_model(num_classes).to(self.device)
         # self.model.load_state_dict(model_dict["state_dict"])
         # self.model.eval()
+        self.model = model
+        self.model.eval()
 
         self.num_classes = num_classes
         self.ensemble_size = ensemble_size
         self.seed = seed
         self.metric = metric
         self.calibration_method = calibration_method
+        self.models = None
+        self.save_path = save_path
+        self.load_models = load_models
+        self.method = method
 
 
-    def create_ensemble(self, model, method):
+    def create_new_param(self, name, param, method, g, seed):
+        if method == "perturb":
+            # These don't change the batch norm layers (initialization is deterministic so variance is zero)
+            if ("conv" in name) or ("downsample.0" in name):
+                g.manual_seed(seed)
+                new_param = param + torch.normal(0, 2/(param.size()[0]*param.size()[2]**2), size=param.size(), generator=g)
+            elif "fc" in name:
+                g.manual_seed(seed)
+                new_param = param + torch.normal(0, 1/(3*512), size=param.size(), generator=g)
+            else:
+                new_param = param
+        elif method == "dropout":
+            # These can change the batchnorm layers (because they are trainable)
+            if param.requires_grad:
+                g.manual_seed(seed)
+                drop_probs = torch.abs(param)/torch.sum(torch.abs(param))
+                new_param = (torch.rand(size=param.size(), generator=g) >= drop_probs).long()*param
+            else:
+                new_param = param
+
+        return new_param
+
+
+
+    def make_ensemble(self):
         """
         Create ensemble for pretrained ResNet18 model
         """
 
-        self.models = []
-        model.eval()
+        self.model.eval()
+        self.models = [self.model]
         g = torch.Generator()
 
-        if method == "perturb":
-            # These don't change the batch norm layers (initialization is deterministic so variance is zero)
+        for i in range(self.ensemble_size-1):
+            state_dict = self.model.state_dict().copy()
+            for j, (name, param) in enumerate(self.model.named_parameters()):
+                new_param = self.create_new_param(name, param, self.method, g, self.seed+i+j)
+                state_dict[name] = new_param
 
-            for i in range(self.ensemble_size-1):
-                state_dict = model.state_dict().copy()
-                for i, (name, param) in enumerate(state_dict.items()):
-                    if ("conv" in name) or ("downsample.0" in name):
-                        g.manual_seed(self.seed+i)
-                        new_param = param + torch.normal(0, 2/(param.size()[0]*param.size()[2]**2), size=param.size(), generator=g)
-                    elif "fc" in name:
-                        g.manual_seed(self.seed+i)
-                        new_param = param + torch.normal(0, 1/(3*512), size=param.size(), generator=g)
-                    else:
-                        new_param = param
-                    state_dict[name] = new_param
-
-            new_model = copy.deepcopy(model)
-            new_model.load_state_dict(state_dict)
-
-            new_model.eval()
-
-            self.models.append(new_model)
-                
-        elif method == "dropout":
-            # These can change the batchnorm layers (because they are trainable)
-
-            for i in range(self.ensemble_size-1):
-                state_dict = model.state_dict().copy()
-                for i, (name, param) in enumerate(model.parameters()):
-                    if param.requires_grad:
-                        g.manual_seed(self.seed+i)
-                        drop_probs = torch.abs(param)/torch.sum(torch.abs(param))
-                        new_param = (torch.rand(size=param.size(), generator=g) >= drop_probs).long()*param
-                    else:
-                        new_param = param
-                    state_dict[name] = new_param
-
-            new_model = copy.deepcopy(model)
-            new_model.load_state_dict(state_dict)
+            new_model = copy.deepcopy(self.model)
+            new_model.load_state_dict(state_dict).to(self.device)
 
             new_model.eval()
 
             self.models.append(new_model)
 
 
-    def calibrate(self, X, y):
+    def raw_ensemble_logits(self, X):
+        all_logits = []
+        self.model.eval()
+        logits = self.model(X).cpu().numpy()
+        all_logits.append(logits)
+
+        g = torch.Generator()
+
+        for i in range(self.ensemble_size-1):
+            state_dict = self.model.state_dict().copy()
+            for j, (name, param) in enumerate(self.model.named_parameters()):
+                new_param = self.create_new_param(name, param, self.method, g, self.seed+i+j)
+                state_dict[name] = new_param
+
+            new_model = copy.deepcopy(self.model)
+            new_model.load_state_dict(state_dict).to(self.device)
+
+            new_model.eval()
+            logits = new_model(X).cpu().numpy()
+            all_logits.append(logits)
+
+        return np.clip(np.dstack(all_logits), 1e-12, 1.0)
+
+    def calibrate(self, X, y, create_ensemble=False):
         # JUCAL calibration
 
         calib_path = (
-            f"{self.save_path}/jucal/{self.calibration_method}/calibrations.pkl"
+            f"{self.save_path}/{self.calibration_method}/calibrations.pkl"
             if self.save_path
             else None
         )
@@ -429,11 +454,22 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
                 best_NLL, best_cs = pickle.load(f)
 
         else:
+
+            if create_ensemble:
+                all_logits = []
+                for i, model in tqdm(enumerate(self.models)):
+                    model.eval()
+                    logits = model(X).cpu().numpy()
+                    all_logits.append(logits)
+                stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+            else:
+                stacked_logits = self.raw_ensemble_logits(X)
+
+
             if self.calibration_method == "jucal":
                 best_NLL, best_cs = JUCAL_calibration_deep(
-                    X=X,
                     y=y,
-                    models=self.models,
+                    stacked_logits=stacked_logits,
                     n_classes=self.n_classes,
                     metric=self.metric,
                     C1=C1_COARSE,
@@ -443,9 +479,8 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
 
             elif self.calibration_method == "ctp":
                 best_NLL, best_cs = calibrate_then_pool_deep(
-                    X=X,
                     y=y,
-                    models=self.models,
+                    stacked_logits=stacked_logits,
                     n_classes=self.n_classes,
                     metric=self.metric,
                     C1=C1_COARSE,
@@ -459,13 +494,22 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
 
         return best_NLL, best_cs
 
-    def ensemble(self, X):
+    def ensemble(self, X, create_ensemble=False):
         # Explicitly output the ensemble (n_samples, n_classes, n_models)
+
+        if create_ensemble:
+            all_logits = []
+            for i, model in tqdm(enumerate(self.models)):
+                model.eval()
+                logits = model(X).cpu().numpy()
+                all_logits.append(logits)
+            stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+        else:
+            stacked_logits = self.raw_ensemble_logits(X)
 
         if self.calibration_method == "jucal":
             return ensemble_JUCAL_calibration_deep(
-                X=X,
-                mdoels=self.models,
+                stacked_logits=stacked_logits,
                 c1=self.cs[0],
                 c2=self.cs[1],
             )
@@ -473,8 +517,7 @@ class MultiClassPCS_JUCAL_DEEP(MultiClassPCS):
 
         elif self.calibration_method == "ctp":
             return ensemble_calibrate_then_pool_oob(
-                X=X,
-                bootstrap_models=self.models,
+                stacked_logits=stacked_logits,
                 c1=self.cs,
                 )
 

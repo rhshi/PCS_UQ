@@ -43,20 +43,20 @@ for dataset_key in range(len(DATASETS)):
 
                 # JUCAL
 
-                print("JUCAL")
+                # print("JUCAL")
 
-                pcs_JUCAL = MultiClassPCS_JUCAL(
-                    MODELS,
-                    num_bootstraps=500,
-                    n_classes=len(np.unique(y)),
-                    seed=seed,
-                    top_k=2,
-                    save_path=save_path,
-                    load_models=True,
-                    metric=log_loss,
-                    calibration_method="jucal",
-                )
-                pcs_JUCAL.fit(Xtrain, y[subsets[sample_proportion]], fill=True)
+                # pcs_JUCAL = MultiClassPCS_JUCAL(
+                #     MODELS,
+                #     num_bootstraps=500,
+                #     n_classes=len(np.unique(y)),
+                #     seed=seed,
+                #     top_k=2,
+                #     save_path=save_path,
+                #     load_models=True,
+                #     metric=log_loss,
+                #     calibration_method="jucal",
+                # )
+                # pcs_JUCAL.fit(Xtrain, y[subsets[sample_proportion]], fill=True)
 
                 # Calibrate then pool
 

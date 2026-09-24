@@ -367,38 +367,47 @@ def calibrate_then_pool_oob(X, y, oob_indices, bootstrap_models, n_classes, clas
     stacked_predictions = np.dstack(all_predictions)
     stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
 
-    best_NLL = np.inf
-    best_c1 = np.nan
+    best_NLLs = []
+    best_c1s = []
 
-    for c1 in C1:
-        adjusted = stacked_logits / c1
-        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
-        NLL = metric(y, probs_jucal, labels=labels_)
-        if NLL < best_NLL:
-            best_NLL = NLL
-            best_c1 = c1
+    for i, model in tqdm(enumerate(bootstrap_models)):
+        best_NLL = np.inf
+        best_c1 = np.nan
 
-    c1 = best_c1
-    
-    c1_min = np.min(C1)
-    c1_low = np.max((0.8*c1, c1_min))
-    c1_high = 1.2*c1
+        for c1 in C1:
+            adjusted = stacked_logits[:, :, i] / c1
+            # probs_jucal = np.nanmean(softmax(adjusted), axis=2)
+            probs = softmax(adjusted)
 
-    best_NLL = np.inf
-    best_c1 = np.nan
-    C1_FINE = np.linspace(c1_low, c1_high, K)
+            NLL = metric(y, probs, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_c1 = c1
 
-    for c1 in C1_FINE:
-        adjusted = stacked_logits / c1
-        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
-        NLL = metric(y, probs_jucal, labels=labels_)
-        if NLL < best_NLL:
-            best_NLL = NLL
-            best_c1 = c1
+        c1 = best_c1
+        
+        c1_min = np.min(C1)
+        c1_low = np.max((0.8*c1, c1_min))
+        c1_high = 1.2*c1
 
-    return best_NLL, best_c1
+        best_NLL = np.inf
+        best_c1 = np.nan
+        C1_FINE = np.linspace(c1_low, c1_high, K)
 
-def ensemble_calibrate_then_pool_oob(X, bootstrap_models, c1, n_classes, classes_per_bootstrap, fill_val):
+        for c1 in C1_FINE:
+            adjusted = stacked_logits[:, :, i] / c1
+            probs = softmax(adjusted)
+            NLL = metric(y, probs, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_c1 = c1
+
+        best_NLLs.append(best_NLL)
+        best_c1s.append(best_c1)
+
+    return best_NLLs, best_c1s
+
+def ensemble_calibrate_then_pool_oob(X, bootstrap_models, c1s, n_classes, classes_per_bootstrap, fill_val):
     all_predictions = []
 
     if fill_val is None:
@@ -416,7 +425,7 @@ def ensemble_calibrate_then_pool_oob(X, bootstrap_models, c1, n_classes, classes
 
     stacked_predictions = np.dstack(all_predictions)
     stacked_logits = np.log(np.clip(stacked_predictions, 1e-12, 1.0))
-    adjusted = stacked_logits / c1
+    adjusted = stacked_logits / np.expand_dims(np.array(c1s), axis=(0, 1))
 
     return softmax(adjusted)
 
@@ -600,46 +609,47 @@ def calibrate_then_pool_deep(y, stacked_logits, n_classes, metric, C1, K):
     # print("number of classes", n_classes)
 
     print("Calibrating models")
-    # for i, model in tqdm(enumerate(models)):
-    #     model.eval()
-    #     logits = model(X).cpu().numpy()
-    #     all_logits.append(logits)
 
+    best_NLLs = []
+    best_c1s = []
 
-    # stacked_logits = np.clip(np.dstack(all_logits), 1e-12, 1.0)
+    for i in tqdm(range(stacked_logits.shape[-1])):
 
-    best_NLL = np.inf
-    best_c1 = np.nan
+        best_NLL = np.inf
+        best_c1 = np.nan
 
-    for c1 in C1:
-        adjusted = stacked_logits / c1
-        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
-        NLL = metric(y, probs_jucal, labels=labels_)
-        if NLL < best_NLL:
-            best_NLL = NLL
-            best_c1 = c1
+        for c1 in C1:
+            adjusted = stacked_logits[:, :, i] / c1
+            probs = softmax(adjusted)
+            NLL = metric(y, probs, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_c1 = c1
 
-    c1 = best_c1
-    
-    c1_min = np.min(C1)
-    c1_low = np.max((0.8*c1, c1_min))
-    c1_high = 1.2*c1
+        c1 = best_c1
+        
+        c1_min = np.min(C1)
+        c1_low = np.max((0.8*c1, c1_min))
+        c1_high = 1.2*c1
 
-    best_NLL = np.inf
-    best_c1 = np.nan
-    C1_FINE = np.linspace(c1_low, c1_high, K)
+        best_NLL = np.inf
+        best_c1 = np.nan
+        C1_FINE = np.linspace(c1_low, c1_high, K)
 
-    for c1 in C1_FINE:
-        adjusted = stacked_logits / c1
-        probs_jucal = np.nanmean(softmax(adjusted), axis=2)
-        NLL = metric(y, probs_jucal, labels=labels_)
-        if NLL < best_NLL:
-            best_NLL = NLL
-            best_c1 = c1
+        for c1 in C1_FINE:
+            adjusted = stacked_logits[:, :, i] / c1
+            probs = softmax(adjusted)
+            NLL = metric(y, probs, labels=labels_)
+            if NLL < best_NLL:
+                best_NLL = NLL
+                best_c1 = c1
 
-    return best_NLL, best_c1
+        best_NLLs.append(best_NLL)
+        best_c1s.append(best_c1)
 
-def ensemble_calibrate_then_pool_deep(stacked_logits, c1):
-    adjusted = stacked_logits / c1
+    return best_NLLs, best_c1s
+
+def ensemble_calibrate_then_pool_deep(stacked_logits, c1s):
+    adjusted = stacked_logits / np.expand_dims(np.array(c1s), axis=(0, 1))
 
     return softmax(adjusted)
