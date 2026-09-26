@@ -1,6 +1,8 @@
-<h1 align="center"> Uncertainty Quantification via the Predictability, Computability, Stability (PCS) Framework </h1>
+<h1 align="center"> Uncertainty Quantification via  JUCAL </h1>
 
-<p align="center">  PCS UQ is a Python library for generating prediction intervals/sets via the PCS framework. Experiments in our paper show that PCS UQ reduces average prediction intervals significantly compared to leading conformal inference methods. 
+Code, experiments, and supplementary results for "JUCAL: JOINTLY CALIBRATING ALEATORIC AND EPISTEMIC UNCERTAINTY IN CLASSIFICATION TASKS."  Further code can be found [here](https://github.com/anoniclr2/iclr26_anon?utm_source=catalyzex.com).  
+
+<!-- <p align="center">  PCS UQ is a Python library for generating prediction intervals/sets via the PCS framework. Experiments in our paper show that PCS UQ reduces average prediction intervals significantly compared to leading conformal inference methods. 
 
 </p>
 
@@ -43,4 +45,4 @@ pcs.calibrate(X,y) # calibrate the model
 pcs.predict(X) # generate prediction intervals/sets
 ```
 
-To run experiments from the paper, run the corresponding shell script in ``experiments/scripts``. Then call ``python experiments/scripts/agg_results.py``.
+To run experiments from the paper, run the corresponding shell script in ``experiments/scripts``. Then call ``python experiments/scripts/agg_results.py``. -->
